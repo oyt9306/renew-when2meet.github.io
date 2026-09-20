@@ -1047,18 +1047,11 @@
       // Supabase Dashboard의 Project Settings → API에서 아래 두 값을 바꾸세요.
       const SUPABASE_URL = 'https://swieivjkbgodzkjticcp.supabase.co';
       const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_S9kaUTE1D9xb4gQgCASxRQ__GTAd3-D';
-
-      
-      const SUPABASE_CONFIGURED =
-        SUPABASE_URL.startsWith('https://') &&
+      const SUPABASE_CONFIGURED = SUPABASE_URL.startsWith('https://') &&
         SUPABASE_URL.endsWith('.supabase.co') &&
         SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_');
-            
       const supabaseClient = SUPABASE_CONFIGURED
-        ? window.supabase.createClient(
-            SUPABASE_URL,
-            SUPABASE_PUBLISHABLE_KEY
-          )
+        ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
         : null;
 
       const elements = {
@@ -1360,11 +1353,14 @@
         }
         elements.participantError.textContent = '';
         activeParticipant = name;
-        const existing = eventState.participants.find((person) => person.userId === currentUserId);
-        draftSlots = new Set(existing?.slots || []);
+        const ownResponse = eventState.participants.find((person) => person.userId === currentUserId);
+        const isSameParticipant = ownResponse && ownResponse.name.toLowerCase() === name.toLowerCase();
+        draftSlots = new Set(isSameParticipant ? ownResponse.slots : []);
         renderSchedule();
         updateActivePerson();
-        showToast(existing ? `${existing.name}님의 시간표를 불러왔어요.` : `${name}님의 가능한 시간을 선택해 주세요.`);
+        showToast(isSameParticipant
+          ? `${ownResponse.name}님의 시간표를 불러왔어요.`
+          : `${name}님의 새 시간표를 시작합니다.`);
       }
 
       function updateActivePerson() {
