@@ -1047,10 +1047,18 @@
       // Supabase Dashboard의 Project Settings → API에서 아래 두 값을 바꾸세요.
       const SUPABASE_URL = 'https://swieivjkbgodzkjticcp.supabase.co';
       const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_S9kaUTE1D9xb4gQgCASxRQ__GTAd3-D';
-      const SUPABASE_CONFIGURED = !SUPABASE_URL.includes('swieivjkbgodzkjticcp') &&
-        !SUPABASE_PUBLISHABLE_KEY.includes('sb_publishable_S9kaUTE1D9xb4gQgCASxRQ__GTAd3-D');
+
+      
+      const SUPABASE_CONFIGURED =
+        SUPABASE_URL.startsWith('https://') &&
+        SUPABASE_URL.endsWith('.supabase.co') &&
+        SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_');
+            
       const supabaseClient = SUPABASE_CONFIGURED
-        ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+        ? window.supabase.createClient(
+            SUPABASE_URL,
+            SUPABASE_PUBLISHABLE_KEY
+          )
         : null;
 
       const elements = {
