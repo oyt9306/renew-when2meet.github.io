@@ -7,6 +7,7 @@
   <meta name="description" content="링크 하나로 모두의 가능한 시간을 빠르게 모으는 일정 조율 도구">
   <title>모일때 — 간단한 일정 조율</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%23101728'/%3E%3Cpath d='M18 21h28v25H18z' fill='%23fff'/%3E%3Cpath d='M18 21h28v9H18z' fill='%23ffca5c'/%3E%3Cpath d='M24 16v10M40 16v10' stroke='%23fff' stroke-width='4' stroke-linecap='round'/%3E%3Cpath d='M25 37l5 5 10-11' fill='none' stroke='%23101728' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <style>
     :root {
       color-scheme: light;
@@ -925,7 +926,7 @@
           </button>
         </footer>
       </form>
-      <p class="privacy-note">입력 내용은 별도 서버로 전송되지 않으며, 공유 링크와 브라우저에만 저장됩니다.</p>
+      <p class="privacy-note">일정과 응답은 공유 시간표를 위해 Supabase에 저장됩니다.</p>
     </section>
 
     <section class="workspace" id="workspaceView" aria-labelledby="workspaceTitle" hidden>
@@ -1009,7 +1010,7 @@
           <section class="side-section">
             <div class="share-note">
               <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 8v4m0 4h.01M10.3 4.9 3.4 17a2 2 0 0 0 1.7 3h13.8a2 2 0 0 0 1.7-3L13.7 4.9a2 2 0 0 0-3.4 0Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-              <span>정적 페이지 버전이라 응답 저장 후 <strong>최신 공유 링크를 다시 전달</strong>해야 모두의 시간표가 함께 보입니다.</span>
+              <span>같은 링크로 접속하면 모든 참가자의 최신 응답을 함께 확인할 수 있습니다.</span>
             </div>
           </section>
         </aside>
@@ -1023,7 +1024,7 @@
         <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
       </div>
       <h2 id="shareModalTitle">공유 링크가 준비됐어요</h2>
-      <p>이 링크에는 이벤트 정보와 지금까지의 응답이 함께 담겨 있습니다.</p>
+      <p>이 링크로 접속하면 저장된 최신 일정과 참가자 응답을 확인할 수 있습니다.</p>
       <input class="text-input share-url" id="shareUrl" readonly aria-label="공유 링크">
       <div class="modal-actions">
         <button class="ghost-button" type="button" id="closeShareModal">닫기</button>
@@ -1043,6 +1044,15 @@
       const COLORS = ['#5f6fff', '#1f9d87', '#e6874d', '#c15e94', '#4b89bf', '#7e62b3'];
       const $ = (selector) => document.querySelector(selector);
 
+      // Supabase Dashboard의 Project Settings → API에서 아래 두 값을 바꾸세요.
+      const SUPABASE_URL = 'https://swieivjkbgodzkjticcp.supabase.co';
+      const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_S9kaUTE1D9xb4gQgCASxRQ__GTAd3-D';
+      const SUPABASE_CONFIGURED = !SUPABASE_URL.includes('swieivjkbgodzkjticcp') &&
+        !SUPABASE_PUBLISHABLE_KEY.includes('sb_publishable_S9kaUTE1D9xb4gQgCASxRQ__GTAd3-D');
+      const supabaseClient = SUPABASE_CONFIGURED
+        ? window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY)
+        : null;
+
       const elements = {
         setupView: $('#setupView'), workspaceView: $('#workspaceView'), eventForm: $('#eventForm'),
         eventName: $('#eventName'), nameError: $('#nameError'), dateError: $('#dateError'), timeError: $('#timeError'),
@@ -1052,7 +1062,7 @@
         participantForm: $('#participantForm'), participantName: $('#participantName'), participantError: $('#participantError'),
         participantList: $('#participantList'), emptyParticipants: $('#emptyParticipants'), participantCount: $('#participantCount'),
         activePersonText: $('#activePersonText'), saveAvailability: $('#saveAvailability'), bestTimeCard: $('#bestTimeCard'),
-        commonTimeCard: $('#commonTimeCard'),
+        commonTimeCard: $('#commonTimeCard'), editEventButton: $('#editEventButton'),
         shareModal: $('#shareModal'), shareUrl: $('#shareUrl'), toast: $('#toast')
       };
 
@@ -1070,6 +1080,9 @@
       let lastDraggedDate = '';
       let suppressDateClick = false;
       let toastTimer;
+      let currentUserId = '';
+      let realtimeChannel = null;
+      let isSaving = false;
 
       function getKstToday() {
         const parts = new Intl.DateTimeFormat('en-CA', { timeZone: KST, year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -1187,26 +1200,45 @@
         return Boolean(name && selectedDates.size && end > start);
       }
 
-      function createEventFromForm() {
+      async function createEventFromForm() {
         if (!validateSetup()) return;
-        const previousParticipants = eventState?.participants || [];
-        eventState = {
-          version: 1,
-          id: eventState?.id || makeId(),
-          name: elements.eventName.value.trim(),
+        if (!SUPABASE_CONFIGURED) {
+          showToast('먼저 index.html에 Supabase Project ID와 Publishable key를 입력해 주세요.');
+          return;
+        }
+
+        const payload = {
+          title: elements.eventName.value.trim(),
           dates: [...selectedDates].sort(),
-          start: Number(elements.startTime.value),
-          end: Number(elements.endTime.value),
-          interval: 30,
-          timezone: KST,
-          participants: previousParticipants.filter((person) =>
-            person.slots.some((slot) => selectedDates.has(slot.split('|')[0]))
-          )
+          start_time: String(Number(elements.startTime.value)),
+          end_time: String(Number(elements.endTime.value))
         };
-        activeParticipant = '';
-        draftSlots = new Set();
-        persistState();
-        showWorkspace();
+
+        try {
+          elements.eventForm.querySelector('button[type="submit"]').disabled = true;
+          if (eventState?.id) {
+            if (eventState.ownerId !== currentUserId) throw new Error('일정은 만든 사람만 수정할 수 있습니다.');
+            const { error } = await supabaseClient.from('events').update(payload).eq('id', eventState.id);
+            if (error) throw error;
+            await refreshEvent(eventState.id);
+            showToast('일정을 수정했어요.');
+          } else {
+            const { data, error } = await supabaseClient.from('events').insert(payload).select().single();
+            if (error) throw error;
+            setEventUrl(data.id);
+            await refreshEvent(data.id);
+            subscribeToResponses(data.id);
+            showToast('공유 시간표를 만들었어요.');
+          }
+          activeParticipant = '';
+          draftSlots = new Set();
+          showWorkspace();
+        } catch (error) {
+          console.error(error);
+          showToast(error.message || '일정을 저장하지 못했습니다.');
+        } finally {
+          elements.eventForm.querySelector('button[type="submit"]').disabled = false;
+        }
       }
 
       function showSetup(editing = false) {
@@ -1224,7 +1256,7 @@
         setTimeout(() => elements.eventName.focus(), 100);
       }
 
-      function showWorkspace() {
+      function showWorkspace(shouldScroll = true) {
         if (!eventState) return;
         elements.setupView.hidden = true;
         elements.workspaceView.hidden = false;
@@ -1235,8 +1267,9 @@
         renderCommonTimes();
         renderBestTime();
         updateActivePerson();
+        elements.editEventButton.hidden = eventState.ownerId !== currentUserId;
         document.title = `${eventState.name} — 모일때`;
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        if (shouldScroll) window.scrollTo({ top: 0, behavior: 'smooth' });
       }
 
       function allSlotIds() {
@@ -1319,7 +1352,7 @@
         }
         elements.participantError.textContent = '';
         activeParticipant = name;
-        const existing = eventState.participants.find((person) => person.name.toLowerCase() === name.toLowerCase());
+        const existing = eventState.participants.find((person) => person.userId === currentUserId);
         draftSlots = new Set(existing?.slots || []);
         renderSchedule();
         updateActivePerson();
@@ -1352,18 +1385,33 @@
         updateActivePerson();
       }
 
-      function saveAvailability() {
-        if (!activeParticipant) return;
-        const existingIndex = eventState.participants.findIndex((person) => person.name.toLowerCase() === activeParticipant.toLowerCase());
-        const person = { name: activeParticipant, slots: [...draftSlots].sort() };
-        if (existingIndex >= 0) eventState.participants[existingIndex] = person;
-        else eventState.participants.push(person);
-        persistState();
-        renderSchedule();
-        renderParticipants();
-        renderCommonTimes();
-        renderBestTime();
-        showToast(`${activeParticipant}님의 가능 시간을 저장했어요.`);
+      async function saveAvailability() {
+        if (!activeParticipant || !eventState?.id || isSaving) return;
+        if (!SUPABASE_CONFIGURED || !currentUserId) {
+          showToast('Supabase 연결을 확인해 주세요.');
+          return;
+        }
+
+        try {
+          isSaving = true;
+          elements.saveAvailability.disabled = true;
+          const { error } = await supabaseClient.from('responses').upsert({
+            event_id: eventState.id,
+            user_id: currentUserId,
+            name: activeParticipant,
+            slots: [...draftSlots].sort(),
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'event_id,user_id' });
+          if (error) throw error;
+          await refreshEvent(eventState.id);
+          showToast(`${activeParticipant}님의 가능 시간을 저장했어요.`);
+        } catch (error) {
+          console.error(error);
+          showToast(error.message || '가능 시간을 저장하지 못했습니다.');
+        } finally {
+          isSaving = false;
+          updateActivePerson();
+        }
       }
 
       function renderParticipants() {
@@ -1379,7 +1427,7 @@
                 <span class="participant-slots">${person.slots.length}칸 선택</span>
               </span>
             </div>
-            <button class="edit-person" type="button" data-person="${escapeHtml(person.name)}">수정</button>
+            ${person.userId === currentUserId ? `<button class="edit-person" type="button" data-person="${escapeHtml(person.name)}">수정</button>` : ''}
           </div>`).join('');
       }
 
@@ -1452,45 +1500,101 @@
         elements.scheduleGrid.classList.remove('is-dragging');
       }
 
-      function encodeState(state) {
-        const json = JSON.stringify(state);
-        const bytes = new TextEncoder().encode(json);
-        let binary = '';
-        bytes.forEach((byte) => binary += String.fromCharCode(byte));
-        return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      async function ensureSupabaseSession() {
+        if (!SUPABASE_CONFIGURED) return false;
+        const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+        if (sessionError) throw sessionError;
+        let session = sessionData.session;
+        if (!session) {
+          const { data, error } = await supabaseClient.auth.signInAnonymously();
+          if (error) throw error;
+          session = data.session;
+        }
+        currentUserId = session?.user?.id || '';
+        return Boolean(currentUserId);
       }
 
-      function decodeState(value) {
-        const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
-        const binary = atob(base64 + '='.repeat((4 - base64.length % 4) % 4));
-        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-        return JSON.parse(new TextDecoder().decode(bytes));
+      function eventIdFromUrl() {
+        return new URLSearchParams(location.search).get('event');
       }
 
-      function validateEventState(value) {
-        if (!value || typeof value !== 'object' || typeof value.name !== 'string' || !value.name.trim() || value.name.length > 60) return false;
-        if (!Array.isArray(value.dates) || value.dates.length < 1 || value.dates.length > 14) return false;
-        if (new Set(value.dates).size !== value.dates.length || value.dates.some((key) => !/^\d{4}-\d{2}-\d{2}$/.test(key) || Number.isNaN(fromDateKey(key).getTime()))) return false;
-        if (!Number.isInteger(value.start) || !Number.isInteger(value.end) || value.start < 0 || value.end > 1440 || value.end <= value.start) return false;
-        if (!Array.isArray(value.participants) || value.participants.length > 50) return false;
-        const allowed = new Set();
-        value.dates.forEach((date) => {
-          for (let min = value.start; min < value.end; min += 30) allowed.add(`${date}|${min}`);
-        });
-        return value.participants.every((person) => person && typeof person.name === 'string' && person.name.trim() && person.name.length <= 24 &&
-          Array.isArray(person.slots) && person.slots.length <= allowed.size && person.slots.every((slot) => allowed.has(slot)));
+      function setEventUrl(eventId) {
+        const url = new URL(location.href);
+        url.hash = '';
+        url.search = '';
+        if (eventId) url.searchParams.set('event', eventId);
+        history.replaceState(null, '', url);
       }
 
       function shareLink() {
-        if (!eventState) return location.href.split('#')[0];
-        return `${location.href.split('#')[0]}#event=${encodeState(eventState)}`;
+        const url = new URL(location.href);
+        url.hash = '';
+        url.search = '';
+        if (eventState?.id) url.searchParams.set('event', eventState.id);
+        return url.href;
       }
 
-      function persistState() {
-        if (!eventState) return;
-        const url = shareLink();
-        history.replaceState(null, '', url);
-        try { localStorage.setItem(`moiltae:${eventState.id}`, JSON.stringify(eventState)); } catch (_) {}
+      async function loadEvent(eventId) {
+        const [eventResult, responseResult] = await Promise.all([
+          supabaseClient.from('events').select('*').eq('id', eventId).single(),
+          supabaseClient.from('responses').select('event_id,user_id,name,slots,updated_at').eq('event_id', eventId).order('updated_at')
+        ]);
+        if (eventResult.error) throw eventResult.error;
+        if (responseResult.error) throw responseResult.error;
+
+        const row = eventResult.data;
+        const dates = Array.isArray(row.dates) ? [...new Set(row.dates)].sort() : [];
+        const start = Number(row.start_time);
+        const end = Number(row.end_time);
+        if (!row.title || !dates.length || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+          throw new Error('저장된 일정 정보가 올바르지 않습니다.');
+        }
+
+        const allowedSlots = new Set();
+        dates.forEach((date) => {
+          for (let min = start; min < end; min += 30) allowedSlots.add(`${date}|${min}`);
+        });
+
+        return {
+          version: 2,
+          id: row.id,
+          ownerId: row.owner_id,
+          name: row.title,
+          dates,
+          start,
+          end,
+          interval: 30,
+          timezone: KST,
+          participants: (responseResult.data || []).map((person) => ({
+            userId: person.user_id,
+            name: String(person.name || '').slice(0, 24),
+            slots: Array.isArray(person.slots) ? person.slots.filter((slot) => allowedSlots.has(slot)) : []
+          })).filter((person) => person.name)
+        };
+      }
+
+      async function refreshEvent(eventId) {
+        eventState = await loadEvent(eventId);
+        selectedDates = new Set(eventState.dates);
+        if (!elements.workspaceView.hidden) showWorkspace(false);
+        return eventState;
+      }
+
+      function subscribeToResponses(eventId) {
+        if (realtimeChannel) supabaseClient.removeChannel(realtimeChannel);
+        realtimeChannel = supabaseClient
+          .channel(`event-${eventId}`)
+          .on('postgres_changes', {
+            event: '*', schema: 'public', table: 'responses', filter: `event_id=eq.${eventId}`
+          }, async () => {
+            try { await refreshEvent(eventId); } catch (error) { console.error(error); }
+          })
+          .on('postgres_changes', {
+            event: 'UPDATE', schema: 'public', table: 'events', filter: `id=eq.${eventId}`
+          }, async () => {
+            try { await refreshEvent(eventId); } catch (error) { console.error(error); }
+          })
+          .subscribe();
       }
 
       async function copyText(text) {
@@ -1511,7 +1615,6 @@
       }
 
       function openShareModal() {
-        persistState();
         elements.shareUrl.value = shareLink();
         elements.shareModal.hidden = false;
         setTimeout(() => elements.shareUrl.select(), 50);
@@ -1529,24 +1632,17 @@
         toastTimer = setTimeout(() => elements.toast.classList.remove('is-visible'), 2400);
       }
 
-      function loadFromUrl() {
-        const match = location.hash.match(/^#event=(.+)$/);
-        if (!match) return false;
+      async function loadFromUrl() {
+        const eventId = eventIdFromUrl();
+        if (!eventId) return false;
         try {
-          if (match[1].length > 150000) throw new Error('too large');
-          const parsed = decodeState(match[1]);
-          if (!validateEventState(parsed)) throw new Error('invalid');
-          eventState = parsed;
-          eventState.timezone = KST;
-          eventState.interval = 30;
-          eventState.participants = eventState.participants
-            .filter((person) => person && typeof person.name === 'string' && Array.isArray(person.slots))
-            .map((person) => ({ name: person.name.slice(0, 24), slots: person.slots.filter((slot) => typeof slot === 'string') }));
-          selectedDates = new Set(eventState.dates);
+          await refreshEvent(eventId);
+          subscribeToResponses(eventId);
           return true;
-        } catch (_) {
-          history.replaceState(null, '', location.href.split('#')[0]);
-          showToast('공유 링크를 읽지 못해 새 이벤트 화면을 열었어요.');
+        } catch (error) {
+          console.error(error);
+          setEventUrl('');
+          showToast('공유 시간표를 불러오지 못해 새 이벤트 화면을 열었어요.');
           return false;
         }
       }
@@ -1560,7 +1656,9 @@
         elements.startTime.value = '540';
         elements.endTime.value = '1080';
         calendarStart = startOfWeek(getKstToday());
-        history.replaceState(null, '', location.href.split('#')[0]);
+        if (realtimeChannel && supabaseClient) supabaseClient.removeChannel(realtimeChannel);
+        realtimeChannel = null;
+        setEventUrl('');
         document.title = '모일때 — 간단한 일정 조율';
         renderCalendar();
         showSetup();
@@ -1583,7 +1681,7 @@
         safeRegister({
           name: 'save_participant_availability',
           title: '참가자 가능 시간 저장',
-          description: '현재 이벤트에 한 참가자의 가능한 시간 목록을 저장하고 화면과 공유 링크를 갱신합니다.',
+          description: '현재 이벤트에 내 가능한 시간 목록을 저장하고 공유 시간표를 갱신합니다.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -1594,7 +1692,7 @@
             additionalProperties: false
           },
           annotations: { readOnlyHint: false, untrustedContentHint: false },
-          execute: ({ name, slots }) => {
+          execute: async ({ name, slots }) => {
             if (!eventState) throw new Error('열린 이벤트가 없습니다.');
             const allowed = new Set(allSlotIds());
             if (typeof name !== 'string' || !name.trim() || !Array.isArray(slots) || slots.some((slot) => !allowed.has(slot))) {
@@ -1602,7 +1700,7 @@
             }
             activeParticipant = name.trim().slice(0, 24);
             draftSlots = new Set(slots);
-            saveAvailability();
+            await saveAvailability();
             return { saved: true, name: activeParticipant, selectedSlotCount: draftSlots.size, shareUrl: shareLink() };
           }
         });
@@ -1713,10 +1811,26 @@
         startNewEvent();
       });
 
-      setupTimeOptions();
-      renderCalendar();
-      if (loadFromUrl()) showWorkspace();
-      registerWebMcpTools();
+      async function initialize() {
+        setupTimeOptions();
+        renderCalendar();
+        registerWebMcpTools();
+
+        if (!SUPABASE_CONFIGURED) {
+          showToast('index.html에 Supabase Project ID와 Publishable key를 입력해 주세요.');
+          return;
+        }
+
+        try {
+          await ensureSupabaseSession();
+          if (await loadFromUrl()) showWorkspace();
+        } catch (error) {
+          console.error(error);
+          showToast(error.message || 'Supabase에 연결하지 못했습니다.');
+        }
+      }
+
+      initialize();
     })();
   </script>
 </body>
