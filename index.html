@@ -1344,23 +1344,36 @@
         elements.scheduleGrid.innerHTML = html;
       }
 
-      function startParticipant(name) {
+       function startParticipant(name) {
         name = name.trim();
+      
         if (!name) {
           elements.participantError.textContent = '이름을 입력해 주세요.';
           elements.participantName.focus();
           return;
         }
+      
         elements.participantError.textContent = '';
         activeParticipant = name;
-        const ownResponse = eventState.participants.find((person) => person.userId === currentUserId);
-        const isSameParticipant = ownResponse && ownResponse.name.toLowerCase() === name.toLowerCase();
-        draftSlots = new Set(isSameParticipant ? ownResponse.slots : []);
+      
+        // 현재 브라우저에서 같은 이름으로 저장한 응답만 검색
+        const existing = eventState.participants.find(
+          (person) =>
+            person.userId === currentUserId &&
+            person.name.toLowerCase() === name.toLowerCase()
+        );
+      
+        // 같은 이름의 응답이 있을 때만 기존 시간표 불러오기
+        draftSlots = new Set(existing?.slots || []);
+      
         renderSchedule();
         updateActivePerson();
-        showToast(isSameParticipant
-          ? `${ownResponse.name}님의 시간표를 불러왔어요.`
-          : `${name}님의 새 시간표를 시작합니다.`);
+      
+        showToast(
+          existing
+            ? `${existing.name}님의 시간표를 불러왔어요.`
+            : `${name}님의 새 시간표를 시작합니다.`
+        );
       }
 
       function updateActivePerson() {
@@ -1405,7 +1418,7 @@
             name: activeParticipant,
             slots: [...draftSlots].sort(),
             updated_at: new Date().toISOString()
-          }, { onConflict: 'event_id,user_id' });
+          }, { onConflict: 'event_id,user_id,name' });
           if (error) throw error;
           await refreshEvent(eventState.id);
           showToast(`${activeParticipant}님의 가능 시간을 저장했어요.`);
